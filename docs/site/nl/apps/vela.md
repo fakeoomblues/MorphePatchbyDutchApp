@@ -24,6 +24,8 @@ Wegmeldingen kunnen posities van camera's of incidenten bevatten. De integratie 
 
 ## Voor gebruik
 
+De koppeling met native FM-gebeurtenissen en spraak wordt nog integraal gevalideerd. De opname door de vastgelegde bronversie heeft de dekkingscontrole doorstaan; audio, routering en levensduur van de ontvanger worden verder gecontroleerd. De categorie-/audiokeuze, het geparkeerde voorbeeld en herstel staan in de [instellingen voor native waarschuwingen](../guides/navigation-data.md#native-waarschuwingsaudio-van-flitsmeister).
+
 Bijgewerkte navigatiegegevenspatches voegen stil starten en controle van de bronmotor toe. Na eenmalige broninstellingen en locatietoegang start Maps/Vela de gekozen Waze- of Flitsmeister-motor zonder het scherm te openen en probeert herstelbare onderbrekingen opnieuw tijdens kaartgebruik. Patch beide kanten opnieuw voor de start-API; de oudere Share alerts-koppeling blijft handmatig starten vereisen. Zie de [installatiegids voor navigatiegegevens](../guides/navigation-data.md).
 
 Patch [Waze 5.26.90.901](waze.md) of [Flitsmeister 14.17](flitsmeister.md) met **Broadcast navigation data**, open de app eenmaal en laat de achtergrondlocatie- of rijdienst draaien. De overlay mag uit blijven. De optionele **Receiver package** van de bronpatch kan op `app.vela` worden gezet. Vanaf Android 14 kan Vela via Android controleren welke bron de gegevens verstuurt; oudere versies bieden die afzendercontrole niet.
@@ -34,7 +36,7 @@ Met een externe bron gekozen toont de compacte kaartweergave de actuele snelheid
 
 Ontbrekende of verlopen waarden vallen waar mogelijk terug op de eigen gegevens van Vela. De bronstatus vermeldt die terugval; een onbekende actuele snelheid krijgt **—**. Een bronwissel, het verlaten van een traject of het verlopen van de trajectwaarnemingen verwijdert dat gedeeltelijke gemiddelde. Gegevens van de twee bronnen blijven gescheiden.
 
-Als een externe bron is gekozen, pauzeert Vela tijdelijk zijn eigen Flock-weergave en waarschuwingen zolang **een van beide** ondersteunde bronnen verse bruikbare gegevens levert. De pauze kan dus doorgaan als de gekozen bron wegvalt maar de andere nog gegevens aanbiedt. Opgeslagen Flock-voorkeuren blijven behouden. Zodra geen van beide verse bruikbare gegevens levert, hervat Vela zijn eigen Flock-gedrag volgens die opgeslagen keuzes. **Vela (eigen gegevens)** kiezen herstelt ook het normale gedrag.
+Met Flitsmeister blijven Vela's opgeslagen Flock-keuzes voor weergave, spraak en omrijden actief. Algemene FM-gegevens over snelheid, limieten of waarschuwingen vervangen die onafhankelijke functies niet. De bestaande overname door De-Waze geldt alleen zolang de gekozen Waze-bron verse gegevens levert; een niet-geselecteerde bron pauzeert eigen Flock niet.
 
 Telefooninstellingen, ontvangst op de achtergrond, compacte telefoon- en autoweergave en gesproken voorwaarschuwingen zijn gecontroleerd op een Android 16-emulator met Gearslip als autohost. Ritten op de weg, fysieke autoschermen en de Android Auto-host van Google zijn niet gevalideerd. Een al gestarte native Flock-verversing kan tijdens de weergave- en waarschuwingspauze aflopen.
 

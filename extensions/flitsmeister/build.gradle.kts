@@ -2,6 +2,7 @@ extension { name = "extensions/flitsmeister.mpe" }
 android {
  namespace = "nl.johninnl.flitsmeister"
  sourceSets.getByName("main").java.srcDir(rootProject.file("support/navigation-startup/src/main/java"))
+ sourceSets.getByName("main").java.srcDir(rootProject.file("support/navigation-alerts/src/main/java"))
  defaultConfig { minSdk = 29 }
  sourceSets.getByName("main").java.srcDir(rootProject.file("support/navigation/src/main/java"))
  testOptions { unitTests.isIncludeAndroidResources = true }

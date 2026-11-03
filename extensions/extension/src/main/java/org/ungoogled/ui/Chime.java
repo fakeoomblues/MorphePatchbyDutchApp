@@ -40,6 +40,9 @@ final class Chime {
         play(new float[]{1319f, 988f, 1319f}, 130, 40);
     }
 
+    /** Same alert melody for the acknowledged, exclusively owned warning track. */
+    static short[] warningPcm() { return synth(new float[]{1319f, 988f, 1319f}, 130, 40); }
+
     /** [notes] in Hz, each [noteMs] long with [gapMs] of silence after it. */
     private static void play(float[] notes, int noteMs, int gapMs) {
         AUDIO.execute(() -> {

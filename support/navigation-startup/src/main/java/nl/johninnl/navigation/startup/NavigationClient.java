@@ -25,7 +25,14 @@ import java.util.concurrent.TimeUnit;
 
 /** Shared Maps/Vela client. All lifecycle state lives on main; synchronous IPC never does. */
 public final class NavigationClient implements Application.ActivityLifecycleCallbacks {
+    public interface Capabilities {
+        /** Runs on the provider's health worker before a cold engine start or running response. */
+        boolean prepare(String source, Bundle status, long generation) throws Exception;
+        /** Runs on main; enqueue cleanup and cancel local output without remote IPC. */
+        void disconnected(long generation);
+    }
     private final Application app;
+    private final Capabilities capabilities;
     private final Handler main = new Handler(Looper.getMainLooper());
     private final Set<Activity> visible = Collections.newSetFromMap(new IdentityHashMap<>());
     private final StartupPolicy recovery = new StartupPolicy();
@@ -39,10 +46,16 @@ public final class NavigationClient implements Application.ActivityLifecycleCall
     private ServiceConnection connection;
 
     public NavigationClient(Context context) {
+        this(context, null);
+    }
+    public NavigationClient(Context context, Capabilities capabilities) {
         app = (Application) context.getApplicationContext();
+        this.capabilities = capabilities;
         app.registerActivityLifecycleCallbacks(this);
     }
     public String state() { return state; }
+    public boolean activeSession(){return active();}
+    public Activity foregroundActivity(){return visible.isEmpty()?null:visible.iterator().next();}
     public String statusLabel(boolean dutch) {
         switch (state) {
             case "running": return dutch ? "motor actief" + (providerMuted ? " · bron gedempt" : "") : "engine running" + (providerMuted ? " · provider muted" : "");
@@ -69,6 +82,7 @@ public final class NavigationClient implements Application.ActivityLifecycleCall
     private boolean active() { return !closed && !provider.isEmpty() && (navigation || !visible.isEmpty()); }
     private void disconnect() {
         generation++; pending = false; binder = null;
+        if (capabilities != null) capabilities.disconnected(generation);
         if (bound && connection != null) try { app.unbindService(connection); } catch (IllegalArgumentException ignored) { }
         bound = false; connection = null;
         for (ThreadPoolExecutor worker : workers.values()) worker.getQueue().clear();
@@ -97,7 +111,7 @@ public final class NavigationClient implements Application.ActivityLifecycleCall
                 main.removeCallbacks(tick); tick.run();
             }
             @Override public void onServiceDisconnected(ComponentName name) {
-                if (token == generation) { binder = null; pending = false; state = "reconnecting"; pollAt = 0; connectionAt = SystemClock.elapsedRealtime(); }
+                if (token == generation) { disconnect(); state = "reconnecting"; pollAt = 0; }
             }
             @Override public void onBindingDied(ComponentName name) {
                 if (token == generation) { disconnect(); state = "reconnecting"; pollAt = 0; }
@@ -124,8 +138,15 @@ public final class NavigationClient implements Application.ActivityLifecycleCall
             Parcel input = Parcel.obtain(), output = Parcel.obtain();
             try {
                 input.writeInterfaceToken(StartupProtocol.DESCRIPTOR);
+                if(capabilities!=null)input.writeInt(1);
                 if (!service.transact(StartupProtocol.STATUS, input, output, 0)) failure = "incompatible";
-                else { output.readException(); response = output.readBundle(PendingIntent.class.getClassLoader()); }
+                else {
+                    output.readException(); response = output.readBundle(PendingIntent.class.getClassLoader());
+                    if (response != null && response.getInt("version") == 1 && capabilities != null
+                            && !capabilities.prepare(selected, response, token)) {
+                        response = null; failure = "reconnecting";
+                    }
+                }
             } catch (SecurityException error) { failure = "not_authorized"; }
             catch (Exception error) { failure = "reconnecting"; }
             finally { input.recycle(); output.recycle(); }

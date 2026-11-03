@@ -19,10 +19,25 @@ import java.util.Collections;
 import java.util.WeakHashMap;
 import java.lang.ref.WeakReference;
 import java.lang.reflect.Proxy;
+import nl.johninnl.navigation.alerts.WarningScheduler;
+import nl.johninnl.navigation.alerts.WarningPreferences;
+import nl.johninnl.navigation.alerts.WarningEvent;
+import nl.johninnl.navigation.alerts.WarningAudioOwner;
+import nl.johninnl.navigation.alerts.PlaybackGrant;
+import nl.johninnl.navigation.alerts.WarningPassage;
+import nl.johninnl.navigation.alerts.WarningStatus;
 
 /** One process-wide consumer shared by the native phone and car UI. No network or GPS requests. */
 public final class TelemetryRuntime {
     private static nl.johninnl.navigation.startup.NavigationClient startup;
+    private static nl.johninnl.navigation.alerts.WarningSession semantic;
+    private static final nl.johninnl.navigation.alerts.WarningView nativeWarnings=new nl.johninnl.navigation.alerts.WarningView();
+    private static final VelaWarningSpeaker nativeSpeaker=new VelaWarningSpeaker();
+    private static WarningScheduler scheduler;
+    private static WarningPreferences warningPreferences;
+    private static boolean eventAudioManaged;
+    private static final Runnable SEMANTIC_RENDER=()->publish(true);
+    private static void semanticRender(){MAIN.removeCallbacks(SEMANTIC_RENDER);MAIN.post(SEMANTIC_RENDER);}
     private TelemetryRuntime() {}
     public static final String ACTION="nl.johninnl.navigation.NAVIGATION_STATE";
     public static final String REQUEST="nl.johninnl.navigation.NAVIGATION_STATE_REQUEST";
@@ -56,9 +71,39 @@ public final class TelemetryRuntime {
         main(()->{
             if(app!=null)return;
             app=context.getApplicationContext();prefs=app.getSharedPreferences("vela_settings",Context.MODE_PRIVATE);changed=onChanged;
-            startup=new nl.johninnl.navigation.startup.NavigationClient(app);
+            warningPreferences=new WarningPreferences(prefs,false);
+            scheduler=new WarningScheduler(new WarningScheduler.Policy(){
+                public boolean active(){return warningPreferences.reviewed()&&TelemetryStore.FLITSMEISTER.equals(selected())&&(nativeGuidance()||carActive()||SystemClock.elapsedRealtime()-phoneAt<=5000||startup!=null&&startup.activeSession());}
+                public WarningAudioOwner.Mode mode(){return warningPreferences.mode();}
+                public boolean enabled(WarningEvent event){return warningPreferences.enabled(event);}
+                public boolean passed(WarningEvent event,long now){
+                    Boolean guidance=sessionGuidanceState();
+                    if(guidance==null)return false;
+                    RoadWarningEngine.Route route=nativeRoute();Location fix=lastFix;
+                    if(guidance)return route!=null&&fix!=null&&event.latitude!=null&&event.longitude!=null&&WarningPassage.passedOnRoute(event,fix,now,route.passageDistance(fix.getLatitude(),fix.getLongitude(),event.latitude,event.longitude,fix.hasAccuracy()?fix.getAccuracy():Double.NaN));
+                    return WarningPassage.passed(event,fix,now);
+                }
+            },new WarningScheduler.Speaker(){
+                public void prepare(String language){nativeSpeaker.prepare(language);}
+                public void prepare(String language,WarningAudioOwner.Mode mode){nativeSpeaker.prepare(language,mode);}
+                public boolean ready(String language,WarningAudioOwner.Mode mode){return nativeSpeaker.isReady(language,mode);}
+                public boolean ready(WarningEvent event,WarningAudioOwner.Mode mode){return nativeSpeaker.canSpeak(event,mode);}
+                public WarningAudioOwner.Mode effective(WarningAudioOwner.Mode mode){return nativeSpeaker.effectiveMode(mode);}
+                public boolean speak(WarningEvent event,PlaybackGrant grant,long deadline,WarningScheduler.Callback callback){return nativeSpeaker.speak(event,grant,deadline,new VelaWarningSpeaker.Listener(){public void started(PlaybackGrant value){callback.started(value);}public void finished(PlaybackGrant value,PlaybackGrant.Outcome outcome,boolean quiet){callback.finished(value,outcome,quiet);}});}
+                public void cancel(PlaybackGrant grant){nativeSpeaker.cancel(grant);}
+            },new WarningScheduler.Observer(){
+                public void changed(String value){if(value.equals("READY")||value.equals("USER_MUTED")||value.equals("STARTED"))eventAudioManaged=true;semanticRender();}
+                public void outcome(WarningEvent event,PlaybackGrant.Outcome value){}
+            });
+            semantic=new nl.johninnl.navigation.alerts.WarningSession(app,new nl.johninnl.navigation.alerts.WarningConnection.Listener(){
+                public void snapshot(nl.johninnl.navigation.alerts.WarningConnection.Snapshot value){nl.johninnl.navigation.alerts.WarningSession current=semantic;if(current!=null&&current.consume(value.providerSession,()->{nativeWarnings.snapshot(value);scheduler.connected(current.connection(),value);}))semanticRender();}
+                public void events(java.util.List<nl.johninnl.navigation.alerts.WarningEvent> values){nl.johninnl.navigation.alerts.WarningSession current=semantic;if(!values.isEmpty()&&current!=null&&current.consume(values.get(0).providerSession,()->{nativeWarnings.events(values);scheduler.events(current.connection(),values);}))semanticRender();}
+                public void ownerRevoked(long epoch){scheduler.revoked(epoch);}
+                public void disconnected(String reason){nativeWarnings.clear();scheduler.disconnected();semanticRender();}
+            });
+            startup=new nl.johninnl.navigation.startup.NavigationClient(app,semantic);
             store.select(prefs.getString("morphe_telemetry_provider",""));
-            preferenceListener=(p,key)->{if(key!=null&&(key.startsWith("morphe_")||key.startsWith("flock_")||key.equals("car_speed_on")||key.equals("speed_cam_warn")))main(()->{store.select(prefs.getString("morphe_telemetry_provider",""));publish(true);});};
+            preferenceListener=(p,key)->{if(key!=null&&(key.startsWith("morphe_")||key.startsWith("flock_")||key.equals("car_speed_on")||key.equals("speed_cam_warn")))main(()->{String next=prefs.getString("morphe_telemetry_provider","");if(!next.equals(selected())){eventAudioManaged=false;semantic.resetEventNegotiation();}store.select(next);scheduler.refresh();publish(true);});};
             prefs.registerOnSharedPreferenceChangeListener(preferenceListener);
             receiver=new BroadcastReceiver() {
                 @Override public void onReceive(Context c,Intent intent) {
@@ -86,7 +131,8 @@ public final class TelemetryRuntime {
     public static void select(String provider) {
         main(()->{
             if(prefs==null)return;
-            store.select(provider);warning="";WARNINGS.reset();
+            store.select(provider);warning="";WARNINGS.reset();nativeWarnings.clear();eventAudioManaged=false;
+            if(semantic!=null)semantic.resetEventNegotiation();
             prefs.edit().putString("morphe_telemetry_provider",store.selected()).apply();
             if(!store.selected().isEmpty())request(store.selected());
             publish(true);
@@ -94,7 +140,7 @@ public final class TelemetryRuntime {
     }
     public static boolean carEnabled() { return prefs==null||prefs.getBoolean("morphe_telemetry_car",true); }
     public static boolean spokenEnabled() { return prefs!=null&&prefs.getBoolean("morphe_telemetry_spoken",prefs.getBoolean("speed_cam_warn",false)); }
-    public static void setSpokenEnabled(boolean value) { if(prefs!=null)prefs.edit().putBoolean("morphe_telemetry_spoken",value).apply(); }
+    public static void setSpokenEnabled(boolean value) { if(prefs!=null){prefs.edit().putBoolean("morphe_telemetry_spoken",value).apply();if(warningPreferences!=null&&warningPreferences.reviewed())warningPreferences.mode(value?WarningAudioOwner.Mode.VOICE:WarningAudioOwner.Mode.SILENT);} }
     public static void setCarEnabled(boolean value) { if(prefs!=null)prefs.edit().putBoolean("morphe_telemetry_car",value).apply(); }
     public static boolean suppressNativeFlock() { return store.suppressNativeFlock(SystemClock.elapsedRealtime()); }
     public static Float speedMps(Float fallback) {
@@ -117,8 +163,11 @@ public final class TelemetryRuntime {
     public static double carSpeedMps(double fallback) { return carEnabled()?speedMps(fallback):fallback; }
     public static Double carLimitKmh(Double fallback) { return carEnabled()?limitKmh(fallback):fallback; }
     public static boolean phoneCurrentUnknown() { return phoneUnknown; }
-    public static boolean showSpeed(boolean nativeValue) { return nativeValue||view().external; }
+    public static boolean showSpeed(boolean nativeValue) { return nativeValue||view().external||!nativeCarWarningText().isEmpty(); }
     public static void phoneState(Object state) {
+        // The guarded outer CornerOverlay hook runs before Compose's skip/visibility gates.
+        // Observe here so a warning can create an initially absent native phone slot.
+        NativeUi.observe();
         phoneAt=SystemClock.elapsedRealtime();
         try {
             Object nativeSpeed=state.getClass().getField("j").get(state);
@@ -132,15 +181,19 @@ public final class TelemetryRuntime {
         if(selected().isEmpty()||!carEnabled()||view().currentKmh!=null)return fallback;
         return freshNativeSpeed()?fallback:"—";
     }
-    public static void bindNavSession(Object session) { navSession=session; }
+    public static void bindNavSession(Object session) { navSession=session;nativeSpeaker.bindSession(session); }
     private static boolean nativeGuidance() { return nativeSessionGuidance(); }
     private static boolean nativeSessionGuidance() {
+        return Boolean.TRUE.equals(sessionGuidanceState());
+    }
+    /** Null means the native session cannot establish active or inactive route state. */
+    private static Boolean sessionGuidanceState() {
         if(navSession==null)return false;
         try {
             Object flow=navSession.getClass().getField("f").get(navSession);
             Object state=flow.getClass().getMethod("getValue").invoke(flow);
             return state.getClass().getField("a").getBoolean(state)&&!state.getClass().getField("b").getBoolean(state)&&!state.getClass().getField("c").getBoolean(state);
-        }catch(ReflectiveOperationException e){return false;}
+        }catch(ReflectiveOperationException|RuntimeException e){return null;}
     }
     /** Reuse Vela's current navigation route; never request another route or position. */
     private static RoadWarningEngine.Route nativeRoute() {
@@ -171,7 +224,11 @@ public final class TelemetryRuntime {
         if(selected().isEmpty())return "Vela";
         TelemetryStore.View v=view();
         if(!v.external)return providerName()+(dutch()?" niet beschikbaar · Vela-gegevens":" unavailable · Vela data")+(startup==null?"":" · "+startup.statusLabel(dutch()));
-        return providerName()+((v.currentKmh==null||v.limitKmh==null)?(dutch()?" · Vela waar nodig":" · Vela fallback where needed"):"");
+        String status=providerName()+((v.currentKmh==null||v.limitKmh==null)?(dutch()?" · Vela waar nodig":" · Vela fallback where needed"):"");
+        if(semantic!=null&&TelemetryStore.FLITSMEISTER.equals(selected())&&"ready".equals(semantic.state()))
+            status+=semantic.captureComplete()?(dutch()?" · waarschuwingen verbonden":" · warnings connected"):(dutch()?" · waarschuwingen nog onvolledig":" · warning coverage incomplete");
+        if(TelemetryStore.FLITSMEISTER.equals(selected())&&warningPreferences!=null)status+=" · "+warningAudioStatus();
+        return status;
     }
     public static String zoneText() {
         TelemetryStore.View v=view();if(!v.zoneActive)return "";
@@ -180,10 +237,19 @@ public final class TelemetryRuntime {
     }
     public static String warningText() { return warning; }
     public static String compactWarningText() {
+        nl.johninnl.navigation.alerts.WarningEvent semanticWarning=nativeWarnings.current(SystemClock.elapsedRealtime(),event->warningPreferences==null||warningPreferences.enabled(event));
+        if(semanticWarning!=null)return "Flitsmeister\n"+nativeWarnings.messages(SystemClock.elapsedRealtime(),event->warningPreferences==null||warningPreferences.enabled(event));
         RoadWarningEngine.Warning w=currentWarning;if(w==null)return "";
         String icon;
         switch(w.kind){case "average_speed_zone":icon="⌀";break;case "police":icon="🚓";break;case "camera":case "mobile_camera":icon="📷";break;case "closure":icon="⛔";break;case "jam":icon="↔";break;case "flock":icon="◉";break;default:icon="⚠";}
         return icon+(w.estimated?"≈":"")+NativeUi.distance(w.distanceMeters,NativeUi.imperial()).replace(" ","").replace("\u00a0","");
+    }
+    /** Native semantic warnings only; the independent car layer never promotes legacy estimates. */
+    static String nativeCarWarningText() {
+        if(!TelemetryStore.FLITSMEISTER.equals(selected()))return "";
+        long now=SystemClock.elapsedRealtime();
+        nl.johninnl.navigation.alerts.WarningEvent event=nativeWarnings.current(now,value->warningPreferences==null||warningPreferences.enabled(value));
+        return event==null?"":"Flitsmeister\n"+nativeWarnings.messages(now,value->warningPreferences==null||warningPreferences.enabled(value));
     }
     public static void setWarning(String value) { main(()->{warning=value==null?"":value;publish(false);}); }
     public static void fix(Location original) { nativeSample(original); }
@@ -226,7 +292,7 @@ public final class TelemetryRuntime {
     }
     public static Location lastFix() { return lastFix==null?null:new Location(lastFix); }
     public static long fixAt() { return fixAt; }
-    public static void bindVoice(Object guide) { voice=guide; }
+    public static void bindVoice(Object guide) { voice=guide;nativeSpeaker.bind(guide); }
     public static void setCarActive(boolean value) { carActive=value;carAt=value?SystemClock.elapsedRealtime():-10000; }
     public static boolean carActive() { return !visibleCarSessions.isEmpty()||(carActive&&SystemClock.elapsedRealtime()-carAt<=5000); }
     public static void setCarSessionVisible(Object session,boolean visible) {
@@ -283,9 +349,14 @@ public final class TelemetryRuntime {
         RoadWarningEngine.Warning ahead=WARNINGS.update(v,fix,nativeRoute(),now);
         currentWarning=ahead;
         warning=ahead==null?"":warningLabel(ahead);
-        if(voiceAvailable()&&(nativeGuidance()||carActive()||now-phoneAt<=5000)&&ahead!=null&&WARNINGS.shouldSpeak(ahead,now))speakWarning(warning);
+        nl.johninnl.navigation.alerts.WarningEvent semanticWarning=nativeWarnings.current(now,event->warningPreferences==null||warningPreferences.enabled(event));
+        if(semanticWarning!=null)warning="Flitsmeister\n"+nativeWarnings.messages(now,event->warningPreferences==null||warningPreferences.enabled(event));
+        if(semantic!=null&&semantic.advertisesEvents(selected()))eventAudioManaged=true;
+        boolean legacyAudio=!TelemetryStore.FLITSMEISTER.equals(selected())||!eventAudioManaged;
+        if(legacyAudio&&voiceAvailable()&&(nativeGuidance()||carActive()||now-phoneAt<=5000)&&ahead!=null&&WARNINGS.shouldSpeak(ahead,now))speakWarning(warningLabel(ahead));
         String key=(startup==null?"":startup.state())+":"+selected()+":"+v.currentKmh+":"+v.limitKmh+":"+v.zoneId+":"+v.zoneSession+":"+v.averageKmh+":"+v.progressPercent+":"+v.remainingMeters+":"+v.external+":"+suppressNativeFlock()+":"+carEnabled()+":"+spokenEnabled()+":"+warning+":"+freshNativeSpeed()+":"+(freshNativeSpeed()&&own!=null?own.getSpeed():null)+":"+phoneNativeLimit;
         if(force||!key.equals(lastKey)){lastKey=key;changed.run();CarUi.changed();}
+        CarUi.warningChanged();
     }
     private static boolean dutch() { return app!=null&&app.getResources().getConfiguration().getLocales().get(0).getLanguage().equals("nl"); }
     private static String warningLabel(RoadWarningEngine.Warning w) {
@@ -304,9 +375,28 @@ public final class TelemetryRuntime {
         return label+" · "+(w.estimated?"≈":"")+NativeUi.distance(w.distanceMeters,NativeUi.imperial());
     }
     private static final Runnable TICK=new Runnable(){public void run(){if(app==null)return;publish(false);MAIN.postDelayed(this,1000);}};
+    public static WarningPreferences warningPreferences(){return warningPreferences;}
+    public static void warningChoicesChanged(){if(scheduler!=null)scheduler.refresh();publish(true);}
+    public static void previewWarning(){
+        android.app.Activity activity=startup==null?null:startup.foregroundActivity();
+        boolean parked=!nativeGuidance()&&!(freshNativeSpeed()&&lastFix!=null&&lastFix.hasSpeed()&&lastFix.getSpeed()>.3);
+        nl.johninnl.navigation.alerts.WarningPreviewDialog.show(activity,parked,dutch(),()->{
+            if(scheduler==null||semantic==null||semantic.connection()==null||!semantic.connection().supportsPreview())return java.util.concurrent.CompletableFuture.completedFuture("INCOMPATIBLE");
+            return scheduler.preview(dutch()?"nl":"en");
+        });
+    }
+    public static void recoverWarningAudio(){
+        android.app.Activity activity=startup==null?null:startup.foregroundActivity();android.app.PendingIntent action=semantic==null?null:semantic.recoveryAction();
+        if(activity==null)return;
+        if(action==null){android.widget.Toast.makeText(activity,dutch()?"Verbind eerst een bijgewerkte Flitsmeister-patch":"Connect an updated Flitsmeister patch first",android.widget.Toast.LENGTH_LONG).show();return;}
+        try{action.send();}catch(android.app.PendingIntent.CanceledException error){android.widget.Toast.makeText(activity,dutch()?"Herstel niet beschikbaar; verbind Flitsmeister opnieuw":"Recovery unavailable; reconnect Flitsmeister",android.widget.Toast.LENGTH_LONG).show();}
+    }
+    public static String warningAudioStatus(){if(warningPreferences==null||!warningPreferences.reviewed())return dutch()?"Waarschuwingskeuzes controleren":"Review warning categories and output";WarningAudioOwner.Mode requested=warningPreferences.mode();return WarningStatus.output(requested,nativeSpeaker.effectiveMode(requested),"Vela",dutch())+" · "+WarningStatus.label(scheduler==null?"OFF":scheduler.status(),dutch());}
     static void resetForTest() {
         carObservers.clear();visibleCarSessions.clear();
         if(startup!=null){startup.close();startup=null;}
+        if(semantic!=null){semantic.close();semantic=null;}nativeWarnings.clear();nativeSpeaker.bind(null);
+        if(scheduler!=null){scheduler.disconnected();scheduler=null;}warningPreferences=null;eventAudioManaged=false;
         MAIN.removeCallbacksAndMessages(null);
         if(app!=null&&receiver!=null)try{app.unregisterReceiver(receiver);}catch(IllegalArgumentException ignored){}
         if(prefs!=null&&preferenceListener!=null)prefs.unregisterOnSharedPreferenceChangeListener(preferenceListener);

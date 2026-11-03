@@ -57,8 +57,10 @@ public final class CompactSpeedView extends View {
         float numberWidth=Math.max(dp(48),Math.max(ink.measureText(current==null?"—":String.valueOf(Math.round(current*factor))),ink.measureText(String.valueOf(Math.round(shownMps*factor)))));
         pairWidth=numberWidth+dp(6)+signSize;
         rowHeight=Math.max(signSize,sp(32)+sp(10)+dp(3));
-        totalHeight=rowHeight+(data.zoneActive?sp(16)+sp(11)+dp(16):0)+(warning.isEmpty()?0:sp(13)+dp(6));
-        setMeasuredDimension(resolveSize((int)Math.ceil(pairWidth+dp(4)),widthSpec),resolveSize((int)Math.ceil(totalHeight+dp(4+bottomClearance)),heightSpec));
+        int warningLines=warning.isEmpty()?0:Math.min(4,warning.split("\n").length);
+        totalHeight=rowHeight+(data.zoneActive?sp(16)+sp(11)+dp(16):0)+warningLines*(sp(13)+dp(6))+(warningLines==0?0:dp(12));
+        float measuredWidth=warningLines==0?pairWidth+dp(4):Math.max(pairWidth+dp(4),dp(240)*Math.min(1.5f,fontScale));
+        setMeasuredDimension(resolveSize((int)Math.ceil(measuredWidth),widthSpec),resolveSize((int)Math.ceil(totalHeight+dp(4+bottomClearance)),heightSpec));
     }
     @Override protected void onDraw(Canvas canvas) {
         super.onDraw(canvas);float x=dp(2),y=dp(2),width=Math.min(pairWidth,getWidth()-dp(4));
@@ -100,9 +102,18 @@ public final class CompactSpeedView extends View {
             ink.setTextAlign(Paint.Align.RIGHT);canvas.drawText(ExternalTelemetry.distance(data.remainingMeters,imperial),x+width,y,ink);ink.setTextAlign(Paint.Align.LEFT);
         }
         if(!warning.isEmpty()) {
-            ink.setTextSize(sp(13));ink.setColor(dark?0xffffd482:0xff3b4350);y+=sp(13)+dp(5);
-            String line=warning;while(ink.measureText(line)>width&&line.length()>2)line=line.substring(0,line.length()-1);
-            canvas.drawText(line,x,y,ink);
+            // Warning text must remain legible over changing map and Explore-sheet imagery.
+            fill.setStyle(Paint.Style.FILL);fill.setColor(dark?0xff20242b:0xfff5f7fa);
+            canvas.drawRoundRect(new RectF(x,y+dp(3),getWidth()-dp(2),getHeight()-dp(2+bottomClearance)),dp(6),dp(6),fill);
+            y+=dp(6);
+            ink.setTextSize(sp(13));ink.setColor(dark?0xffffd482:0xff3b4350);
+            ink.clearShadowLayer();
+            android.text.TextPaint warningInk=new android.text.TextPaint(ink);
+            for(String line:warning.split("\n",4)){
+                y+=sp(13)+dp(5);
+                String shown=android.text.TextUtils.ellipsize(line,warningInk,Math.max(0,getWidth()-dp(20)),android.text.TextUtils.TruncateAt.END).toString();
+                canvas.drawText(shown,x+dp(8),y,warningInk);
+            }
         }
     }
     @Override protected void onDetachedFromWindow(){if(animation!=null)animation.cancel();super.onDetachedFromWindow();}

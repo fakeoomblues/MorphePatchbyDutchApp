@@ -10,7 +10,7 @@ import com.android.tools.smali.dexlib2.Opcode
 import com.android.tools.smali.dexlib2.iface.instruction.ReferenceInstruction
 
 private const val FEED = "Lnl/johninnl/flitsmeister/NavigationBroadcasts;"
-private val startupResources = patches.shared.navigationStartupResources("nl.johninnl.flitsmeister")
+private val startupResources = patches.shared.navigationStartupResources("nl.johninnl.flitsmeister",warningRecovery=true)
 
 @Suppress("unused")
 val navigationBroadcastPatch = bytecodePatch(
@@ -35,6 +35,7 @@ val navigationBroadcastPatch = bytecodePatch(
     // Other Flitsmeister controls validate fixed instruction layouts in execute.
     // Add hooks only after those guarded edits have completed.
     finalize {
+        bindFlitsmeisterNativeWarnings()
         bindFlitsmeisterNavigationAudio()
         if (isFlitsmeister15()) {
             installNavigation15()

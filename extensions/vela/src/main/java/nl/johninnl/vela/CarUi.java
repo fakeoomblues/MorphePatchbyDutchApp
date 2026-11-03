@@ -17,6 +17,8 @@ import java.util.WeakHashMap;
 /** Native Vela 0.5.2621 car templates and map-surface additions. No window or car runtime. */
 public final class CarUi {
     private static final Map<Object,Object> PARENTS = Collections.synchronizedMap(new WeakHashMap<>());
+    private static final Map<Object,Boolean> RENDERERS=Collections.synchronizedMap(new WeakHashMap<>());
+    private static String lastWarningFrameKey="";
     private static boolean loggedFailure;
     private CarUi() {}
 
@@ -40,6 +42,7 @@ public final class CarUi {
 
     /** Call on the main thread when the runtime publishes a new telemetry/preference state. */
     public static void changed() {
+        warningChanged();
         Object[] pages;
         synchronized (PARENTS) { pages = PARENTS.keySet().toArray(); }
         for (Object page : pages) {
@@ -131,6 +134,44 @@ public final class CarUi {
         return invoke(builder, "b");
     }
 
+    /** Request the original surface snapshot on semantic arrival, clear and expiry, even without GPS. */
+    public static void warningChanged() {
+        if(TelemetryRuntime.app()==null)return;
+        String key=TelemetryRuntime.carEnabled()+":"+TelemetryRuntime.app().getSharedPreferences("vela_settings",0).getBoolean("car_speed_on",false)+":"+TelemetryRuntime.nativeCarWarningText();
+        if(key.equals(lastWarningFrameKey))return;
+        lastWarningFrameKey=key;
+        Object[] renderers;synchronized(RENDERERS){renderers=RENDERERS.keySet().toArray();}
+        for(Object renderer:renderers)try{invoke(renderer,"s");}catch(ReflectiveOperationException error){failure(error);}
+    }
+
+    /** Observe every actual native map frame, including browsing and a disabled speed display. */
+    public static void warningFrame(Object renderer, Canvas canvas) {
+        RENDERERS.put(renderer,Boolean.TRUE);
+        TelemetryRuntime.carFrame(renderer);
+        if (!TelemetryRuntime.carEnabled()) return;
+        String warning=TelemetryRuntime.nativeCarWarningText();
+        if (warning.isEmpty()) return;
+        try {
+            // The existing compact speed/zone renderer already includes the same warning on
+            // native drive/navigation frames. Preserve its layout and do not draw it twice.
+            boolean nativeDrive=Boolean.TRUE.equals(invoke(renderer,"n"))||Boolean.TRUE.equals(field(renderer,"I"));
+            boolean nativeSpeed=TelemetryRuntime.app().getSharedPreferences("vela_settings",0).getBoolean("car_speed_on",false);
+            if (nativeDrive&&nativeSpeed) return;
+            Rect safe=new Rect((Rect)invoke(renderer,"u"));
+            if (!safe.intersect(0,0,canvas.getWidth(),canvas.getHeight())) return;
+            drawWarning(canvas,safe,warning,Boolean.TRUE.equals(invoke(renderer,"l")),(Paint)field(renderer,"m0"));
+        } catch (ReflectiveOperationException|RuntimeException error) { failure(error); }
+    }
+    static void drawWarning(Canvas canvas,Rect safe,String warning,boolean dark,Paint nativePaint) {
+        String[] lines=warning.split("\n",4);
+        float scale=Math.min(1f,Math.min((safe.width()-16f)/156f,(safe.height()-16f)/(lines.length*22f)));
+        if(scale<.5f)return;
+        RectF bounds=new RectF(safe.right-8f-156f*scale,safe.bottom-8f-lines.length*22f*scale,safe.right-8f,safe.bottom-8f);
+        Paint text=new Paint(nativePaint);text.setTextAlign(Paint.Align.LEFT);text.setTextSize(18f*scale);
+        text.setColor(dark?Color.WHITE:0xff111827);text.setShadowLayer(1.5f*scale,0,0,dark?0x99000000:0xbbffffff);
+        int save=canvas.save();try{canvas.clipRect(bounds);for(int i=0;i<lines.length;i++)canvas.drawText(ellipsize(lines[i],text,bounds.width()),bounds.left,bounds.top+(17f+22f*i)*scale,text);}finally{canvas.restoreToCount(save);}
+    }
+
     /** Intercept only the selected external-provider display; native mode keeps the original renderer. */
     public static boolean compact(Object renderer, Canvas canvas) {
         TelemetryRuntime.carFrame(renderer);
@@ -148,7 +189,7 @@ public final class CarUi {
             String warning = TelemetryRuntime.compactWarningText();
             float radius = Math.max(22f, Math.min(46f,
                     Math.min(((Number)field(renderer,"h")).intValue(), ((Number)field(renderer,"i")).intValue()) / 18f));
-            Layout layout = compactLayout(safe, Math.max(.7f, radius / 46f), view.zoneActive, !warning.isEmpty());
+            Layout layout = compactLayout(safe, Math.max(.7f, radius / 46f), view.zoneActive, warning.isEmpty()?0:Math.min(4,warning.split("\n").length));
             if (layout == null) return true;
             renderCompact(canvas, layout, current, limit, view, warning, imperial, dark,
                     (Paint)field(renderer,"l0"), (Paint)field(renderer,"m0"), (Paint)field(renderer,"p0"),
@@ -161,22 +202,26 @@ public final class CarUi {
     static final class Layout {
         final RectF bounds, pair, bar;
         final float scale, rowTop;
-        Layout(RectF bounds, float scale, boolean zone, boolean warning) {
+        Layout(RectF bounds, float scale, boolean zone, int warningLines) {
             this.bounds = bounds; this.scale = scale;
-            rowTop = bounds.top + (warning ? 22f * scale : 0f);
+            rowTop = bounds.top + warningLines * 22f * scale;
             pair = new RectF(bounds.left, rowTop, bounds.right, rowTop + 68f * scale);
             bar = zone ? new RectF(pair.left, rowTop + 97f * scale, pair.right, rowTop + 101f * scale) : null;
         }
     }
     static Layout compactLayout(Rect safe, float requestedScale, boolean zone, boolean warning) {
-        float height = (zone ? 128f : 68f) + (warning ? 22f : 0f);
+        return compactLayout(safe,requestedScale,zone,warning?1:0);
+    }
+    static Layout compactLayout(Rect safe, float requestedScale, boolean zone, int warningLines) {
+        warningLines=Math.max(0,Math.min(4,warningLines));
+        float height = (zone ? 128f : 68f) + warningLines * 22f;
         float scale = Math.min(1f, requestedScale);
         scale = Math.min(scale, Math.min((safe.width()-16f)/156f, (safe.height()-16f)/height));
         if (scale < .5f) return null;
         float margin = 8f;
         RectF bounds = new RectF(safe.right-margin-156f*scale, safe.bottom-margin-height*scale,
                 safe.right-margin, safe.bottom-margin);
-        return new Layout(bounds, scale, zone, warning);
+        return new Layout(bounds, scale, zone, warningLines);
     }
 
     static void renderCompact(Canvas canvas, Layout layout, String current, Double limitKmh,
@@ -212,7 +257,8 @@ public final class CarUi {
             canvas.drawText(max,limitX,top+46f*k,limit);
             if(!warning.isEmpty()) {
                 unit.setTextAlign(Paint.Align.LEFT); unit.setTextSize(18f*k);
-                canvas.drawText(ellipsize(warning,unit,layout.bounds.width()),left,layout.bounds.top+17f*k,unit);
+                String[] lines=warning.split("\n",4);
+                for(int i=0;i<lines.length;i++)canvas.drawText(ellipsize(lines[i],unit,layout.bounds.width()),left,layout.bounds.top+(17f+22f*i)*k,unit);
             }
             if(view.zoneActive) {
                 unit.setTextAlign(Paint.Align.LEFT); unit.setTextSize(20f*k);

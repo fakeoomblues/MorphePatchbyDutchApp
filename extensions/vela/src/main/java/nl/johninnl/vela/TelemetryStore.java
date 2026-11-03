@@ -49,9 +49,9 @@ public final class TelemetryStore {
 
     /** Mask effective native behavior; never write the user's saved Flock preferences. */
     public synchronized boolean suppressNativeFlock(long now) {
-        if(selected.isEmpty())return false;
-        for(Peer p:peers.values())if(p.live(now)&&p.usable(now))return true;
-        return false;
+        if(!WAZE.equals(selected))return false;
+        Peer peer=peers.get(WAZE);
+        return peer!=null && peer.live(now) && peer.usable(now);
     }
 
     private static boolean fresh(long at,long maxAge,long now) { return maxAge>0&&at>=0&&now>=at&&now-at<=maxAge; }

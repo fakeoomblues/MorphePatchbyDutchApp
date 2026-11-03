@@ -50,6 +50,7 @@ public final class ProjectionRenderer {
     private Configuration configuration;
     private Surface surface;
     private int width, height, dpi;
+    private final Rect visibleBounds=new Rect(), stableBounds=new Rect();
     private int nativeWidth, nativeHeight, nativeDpi;
     private boolean bound, created, resumed, closed, failed;
     private volatile boolean keyboardRequested;
@@ -112,12 +113,13 @@ public final class ProjectionRenderer {
         });
     }
     public void start() {}
-    public void resume() { resumed = true; guard(() -> { if (created) lifecycle(5); }); }
-    public void pause() { resumed = false; guard(() -> { finishTouch(); if (created) lifecycle(3); }); }
-    public void stop() { resumed = false; guard(() -> { finishTouch(); if (created) lifecycle(2); }); }
+    public void resume() { resumed = true; guard(() -> { if (created) lifecycle(5); telemetrySession(true); telemetrySurface(decor()); }); }
+    public void pause() { resumed = false; guard(() -> { telemetrySession(false); finishTouch(); if (created) lifecycle(3); }); }
+    public void stop() { resumed = false; guard(() -> { telemetrySession(false); finishTouch(); if (created) lifecycle(2); }); }
     public void close() {
         if (closed) return;
         closed = true;
+        telemetrySession(false);
         main.removeCallbacks(bindTimeout);
         main.removeCallbacks(endScroll);
         try { destroySurface(); } catch (Exception error) { Log.w("MapsNativeCar", "Native car cleanup failed", error); }
@@ -160,8 +162,14 @@ public final class ProjectionRenderer {
         });
     }
     public void surfaceDestroyed() { guard(this::detachSurface); }
-    public void visibleArea(Rect area) {}
-    public void stableArea(Rect area) {}
+    public void visibleArea(Rect area) { guard(()->{visibleBounds.set(area==null?new Rect():area);telemetrySurface(decor());}); }
+    public void stableArea(Rect area) { guard(()->{stableBounds.set(area==null?new Rect():area);telemetrySurface(decor());}); }
+    static Rect warningViewport(int width,int height,Rect visible,Rect stable){
+        Rect result=new Rect(0,0,Math.max(0,width),Math.max(0,height));
+        if(visible!=null&&!visible.isEmpty())result.intersect(visible);
+        if(stable!=null&&!stable.isEmpty())result.intersect(stable);
+        return result;
+    }
     public void back() {
         guard(() -> {
             finishTouch();
@@ -227,6 +235,7 @@ public final class ProjectionRenderer {
             Object holder = field(field(controller, "k"), "h");
             call(holder, "f", new Class<?>[]{Surface.class}, surface);
             controller.getClass().getField("C").set(controller, drawing(nativeWidth, nativeHeight, nativeDpi));
+            if(resumed)telemetrySurface(decor());
             return;
         }
         Object drawing = drawing(width, height, dpi);
@@ -235,7 +244,7 @@ public final class ProjectionRenderer {
         call(controller, "o", new Class<?>[]{region.getClass(), drawing.getClass(), Intent.class, Configuration.class, Bundle.class}, region, drawing, intent, configuration, new Bundle());
         nativeWidth = width; nativeHeight = height; nativeDpi = dpi;
         created = true;
-        if (resumed) lifecycle(5);
+        if (resumed) { lifecycle(5); telemetrySession(true); telemetrySurface(decor()); }
     }
     private Object drawing(int w, int h, int density) throws Exception {
         return type("com.google.android.gms.car.DrawingSpec").getConstructor(int.class, int.class, int.class, Surface.class, Rect.class, int.class, int.class, Bundle.class)
@@ -243,6 +252,7 @@ public final class ProjectionRenderer {
     }
     private void lifecycle(int state) throws Exception { call(controller, "m", new Class<?>[]{int.class, boolean.class}, state, false); }
     private void detachSurface() throws Exception {
+        telemetrySurface(null);
         finishTouch();
         if (controller != null && created) {
             // Maps' original VirtualDisplay holder can change its output without destroying
@@ -254,6 +264,7 @@ public final class ProjectionRenderer {
         surface = null;
     }
     private void destroySurface() throws Exception {
+        telemetrySurface(null);
         finishTouch();
         if (controller != null && created) {
             lifecycle(0);
@@ -264,6 +275,17 @@ public final class ProjectionRenderer {
         keyboardRequested = false;
         if (surface != null) surface.release();
         surface = null;
+    }
+    private Class<?> telemetryType() throws ClassNotFoundException {return Class.forName("org.ungoogled.ui.ExternalTelemetry",true,service.getClassLoader());}
+    private void telemetrySession(boolean active) {
+        try {telemetryType().getMethod("carSession",Context.class,Object.class,boolean.class).invoke(null,service,this,active);}
+        catch(ClassNotFoundException absent) { /* The warning patch is optional. */ }
+        catch(ReflectiveOperationException|RuntimeException error){Log.w("MapsNativeCar","Warning car lifecycle unavailable",error);}
+    }
+    private void telemetrySurface(View root) {
+        try {telemetryType().getMethod("carSurface",Object.class,android.view.ViewGroup.class,Rect.class).invoke(null,this,root instanceof android.view.ViewGroup?root:null,warningViewport(width,height,visibleBounds,stableBounds));}
+        catch(ClassNotFoundException absent) { /* The warning patch is optional. */ }
+        catch(ReflectiveOperationException|RuntimeException error){Log.w("MapsNativeCar","Warning car surface unavailable",error);}
     }
     private View decor() throws Exception {
         if (!created || controller == null) return null;

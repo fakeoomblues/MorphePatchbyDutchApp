@@ -21,4 +21,15 @@ public class CompactSpeedViewTest {
   CompactSpeedView v=new CompactSpeedView(RuntimeEnvironment.getApplication());v.bind(TelemetryStore.View.empty("com.waze"),null,null,false,false,"");assertTrue(v.getContentDescription().toString().contains("Current speed unknown"));
   v.bind(TelemetryStore.View.empty("com.waze"),0f,50d,false,false,"");assertTrue(v.getContentDescription().toString().startsWith("Current speed 0"));assertFalse(v.getContentDescription().toString().contains("Flitsmeister"));
  }
+ @Test public void warningPaddingKeepsTheOriginalSpeedAndLimitPairGeometry()throws Exception{
+  CompactSpeedView v=new CompactSpeedView(RuntimeEnvironment.getApplication());
+  v.bind(TelemetryStore.View.empty("nl.flitsmeister"),0f,100d,false,false,"");measure(v);
+  float pair=value(v,"pairWidth"),sign=value(v,"signSize"),row=value(v,"rowHeight");int height=v.getMeasuredHeight();
+  v.bind(TelemetryStore.View.empty("nl.flitsmeister"),0f,100d,false,false,"Flitsmeister\nWrong-way driver\nEmergency vehicle behind\nPerson on road");measure(v);
+  assertEquals(pair,value(v,"pairWidth"),0);assertEquals(sign,value(v,"signSize"),0);assertEquals(row,value(v,"rowHeight"),0);
+  assertTrue(v.getMeasuredHeight()>height+4*13);assertTrue(v.getContentDescription().toString().contains("Emergency vehicle behind"));
+  v.bind(TelemetryStore.View.empty("nl.flitsmeister"),0f,100d,false,true,"");measure(v);assertEquals(height,v.getMeasuredHeight());
+ }
+ private static void measure(View v){v.measure(View.MeasureSpec.makeMeasureSpec(500,View.MeasureSpec.AT_MOST),View.MeasureSpec.makeMeasureSpec(500,View.MeasureSpec.AT_MOST));}
+ private static float value(CompactSpeedView v,String name)throws Exception{java.lang.reflect.Field field=CompactSpeedView.class.getDeclaredField(name);field.setAccessible(true);return field.getFloat(v);}
 }

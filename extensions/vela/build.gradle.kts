@@ -2,6 +2,7 @@ extension { name = "extensions/vela.mpe" }
 android {
  namespace = "nl.johninnl.vela"
  sourceSets.getByName("main").java.srcDir(rootProject.file("support/navigation-startup/src/main/java"))
+ sourceSets.getByName("main").java.srcDir(rootProject.file("support/navigation-alerts/src/main/java"))
  defaultConfig { minSdk = 26 }
  testOptions { unitTests.isIncludeAndroidResources = true }
  buildTypes { getByName("release") { proguardFiles("proguard-rules.pro") } }

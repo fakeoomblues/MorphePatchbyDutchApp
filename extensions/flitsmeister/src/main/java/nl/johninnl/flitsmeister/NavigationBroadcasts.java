@@ -53,6 +53,7 @@ public final class NavigationBroadcasts {
     }
     public static void init(Context context) {
         nl.johninnl.navigation.startup.ProviderAudio.init(context);
+        if(NativeWarnings.supportsEventProtocol(context))NativeWarnings.init(context);
         Context application = context.getApplicationContext();
         main(() -> {
             if (app != null) return;
@@ -71,6 +72,7 @@ public final class NavigationBroadcasts {
         });
     }
     public static void started() {
+        if(NativeWarnings.endpoint()!=null)NativeWarnings.started();
         drivingEngine = true;
         main(() -> { if (app == null || active) return; active = true; STATE.reset(true); ALERTS.reset(true); dirty = true;
             publish(true); MAIN.removeCallbacks(TICK); MAIN.postDelayed(TICK,1000); });
@@ -80,6 +82,7 @@ public final class NavigationBroadcasts {
         main(() -> { if (at<candidateAt) return; candidateAt=at; candidate=null; ALERTS.approach("",-1,false,at); STATE.clear("flitsmeister",at); dirty=true; publish(true); });
     }
     public static void stopped() {
+        NativeWarnings.stopped();
         drivingEngine = false;
         generation++;
         main(() -> { active = false; candidate = null; candidateAt=SystemClock.elapsedRealtime(); STATE.reset(true); ALERTS.reset(true); STATE.clear("flitsmeister",SystemClock.elapsedRealtime());
@@ -187,6 +190,7 @@ public final class NavigationBroadcasts {
     }
     public static void reports(Object value) {
         if(!(value instanceof Collection))return;
+        if(NativeWarnings.endpoint()!=null)NativeWarnings.reports(value);
         final long at=SystemClock.elapsedRealtime(), token=generation;
         List<NavigationAlerts.Alert> reports=new ArrayList<>();
         for(Object entry:(Collection<?>)value) {
@@ -211,6 +215,9 @@ public final class NavigationBroadcasts {
             case "POLICEHOTSPOT":return "police";case "TRAFFIC_JAM":return "jam";case "AVG_SPEED_CHECK":return "average_speed_zone";
             case "CITS_BRIDE_CLOSED":case "CITS_LANE_CLOSED":return "closure";
             case "INCIDENT":
+                // These concrete models report INCIDENT without implementing Incident.
+                for(Class<?> model=report.getClass();model!=null;model=model.getSuperclass())
+                    if(model.getSimpleName().equals("EarlyWarningReport")||model.getSimpleName().equals("CitsBaseReport"))return "hazard";
                 String incident=String.valueOf(call(report,"getIncidentType"));
                 if(incident.equals("ACCIDENT"))return "crash";
                 if(incident.equals("ROAD_CLOSURE") || incident.equals("CLOSURE_WITH_REROUTE"))return "closure";
@@ -241,7 +248,7 @@ public final class NavigationBroadcasts {
         String status=status(n);
         if(!force && status.equals(lastStatus) && now-lastSent<(dirty?1000:5000))return;
         Intent i=ALERTS.append(NavigationProtocol.snapshot(ACTION,app.getPackageName(),SESSION,++sequence,n,now),now);
-        NavigationProtocol.send(app,i,receiverPackage());
+        sendWarningsView(i);
         lastStatus=status; lastSent=now; dirty=false;
     }
     private static final Runnable TICK=new Runnable() {
@@ -252,6 +259,24 @@ public final class NavigationBroadcasts {
             MAIN.postDelayed(this,1000);
         }
     };
+    /** During event ownership, explicit disjoint views prevent a parallel legacy chime. */
+    private static void sendWarningsView(Intent snapshot) {
+        nl.johninnl.navigation.alerts.WarningEndpoint warnings=NativeWarnings.endpoint();
+        if(warnings==null||!warnings.exclusiveAudio()) { NavigationProtocol.send(app,snapshot,receiverPackage());return; }
+        java.util.Set<String> capable=warnings.capablePackages();
+        String restriction=receiverPackage();
+        String[] destinations=restriction.isEmpty()?new String[]{"app.vela","com.google.android.apps.maps",
+            "org.ungoogled.android.apps.maps","org.ungoogled.android.apps.maps.microg"}:new String[]{restriction};
+        Intent compatibility=new Intent(snapshot);
+        for(String key:new ArrayList<>(compatibility.getExtras().keySet()))
+            if(key.startsWith("alert_")||(key.startsWith("zone_approach_")&&!key.equals("zone_approach_updated_elapsed_ms")&&!key.equals("zone_approach_max_age_ms")))compatibility.removeExtra(key);
+        compatibility.putExtra("alerts_status","disabled").putExtra("zone_approach_status","disabled");
+        for(String destination:destinations) {
+            try { app.getPackageManager().getApplicationInfo(destination,0); }
+            catch(android.content.pm.PackageManager.NameNotFoundException absent){continue;}
+            NavigationProtocol.send(app,new Intent(capable.contains(destination)?snapshot:compatibility),destination);
+        }
+    }
     static void resetForTest() {
         drivingEngine = false;
         MAIN.removeCallbacksAndMessages(null);

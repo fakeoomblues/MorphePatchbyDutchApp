@@ -40,11 +40,13 @@ public class TelemetryStoreTest {
   Map<String,Object> heartbeat=packet(WAZE,"w1",2,4000);heartbeat.put("current_speed_updated_elapsed_ms",1000L);heartbeat.put("road_updated_elapsed_ms",1000L);s.accept(heartbeat,WAZE,4000);
   assertNull(s.view(6001).currentKmh);assertFalse(s.suppressNativeFlock(14001));
  }
- @Test public void eitherFreshAdvertiserPausesFlockOnlyWhenAnExternalSourceWasSelected() {
+ @Test public void fmTelemetryAndUnselectedFeedsDoNotMaskIndependentNativeFlock() {
   TelemetryStore s=new TelemetryStore();s.accept(packet(FM,"f1",1,1000),FM,1000);
   assertFalse(s.suppressNativeFlock(1000));s.select(WAZE);
-  assertTrue(s.suppressNativeFlock(1000));assertFalse(s.view(1000).external);
-  assertFalse(s.suppressNativeFlock(11001));
+  assertFalse(s.suppressNativeFlock(1000));assertFalse(s.view(1000).external);
+  s.accept(packet(WAZE,"w1",1,1000),WAZE,1000);assertTrue(s.suppressNativeFlock(1000));
+  s.select(FM);assertFalse(s.suppressNativeFlock(1000));assertTrue(s.view(1000).external);
+  s.select(WAZE);assertFalse(s.suppressNativeFlock(11001));
  }
  @Test public void partialZoneDataExpiresAndCannotBleedAcrossSourcesOrProcessSessions() {
   TelemetryStore s=new TelemetryStore();s.select(WAZE);Map<String,Object> p=packet(WAZE,"w1",1,5000);

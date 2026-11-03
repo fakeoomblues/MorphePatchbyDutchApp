@@ -25,6 +25,9 @@ public abstract class ProviderEngineService extends Service {
     protected abstract boolean enabled();
     protected abstract boolean engineRunning();
     protected abstract void startEngine() throws ReflectiveOperationException;
+    protected String integrationStatus(){return "Providing driving data to your selected map";}
+    private String notificationStatus;
+    private Notification notification(String detail){return new Notification.Builder(this,"navigation_data").setSmallIcon(android.R.drawable.ic_menu_mylocation).setContentTitle("Navigation data sharing").setContentText(detail).setOngoing(true).build();}
 
     public static void renewLease(Context context) {
         context.getSharedPreferences(PREFS, MODE_PRIVATE).edit()
@@ -51,9 +54,7 @@ public abstract class ProviderEngineService extends Service {
         try {
             NotificationManager manager = getSystemService(NotificationManager.class);
             manager.createNotificationChannel(new NotificationChannel("navigation_data", "Navigation data", NotificationManager.IMPORTANCE_LOW));
-            Notification notification = new Notification.Builder(this, "navigation_data")
-                .setSmallIcon(android.R.drawable.ic_menu_mylocation).setContentTitle("Navigation data sharing")
-                .setContentText("Providing driving data to your selected map").setOngoing(true).build();
+            notificationStatus=integrationStatus();Notification notification=notification(notificationStatus);
             if (Build.VERSION.SDK_INT >= 29) startForeground(29171, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION);
             else startForeground(29171, notification);
             starting = true; state = "starting";
@@ -72,6 +73,8 @@ public abstract class ProviderEngineService extends Service {
             if (!leased() || !enabled()) { stopSelf(); return; }
             try { state = engineRunning() ? "running" : "starting"; }
             catch (RuntimeException error) { state = "error"; }
+            String detail=integrationStatus();
+            if(!detail.equals(notificationStatus)){notificationStatus=detail;getSystemService(NotificationManager.class).notify(29171,notification(detail));}
             main.postDelayed(this, 5000);
         }
     };

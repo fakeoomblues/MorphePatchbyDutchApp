@@ -4,7 +4,7 @@ import app.morphe.patcher.patch.resourcePatch
 import org.w3c.dom.Element
 
 /** Add the control API only when navigation sharing is selected; keep native services private. */
-internal fun navigationStartupResources(namespace: String) = resourcePatch {
+internal fun navigationStartupResources(namespace: String, warningRecovery: Boolean = false) = resourcePatch {
     execute {
         document("AndroidManifest.xml").use { manifest ->
             val root = manifest.documentElement
@@ -15,6 +15,10 @@ internal fun navigationStartupResources(namespace: String) = resourcePatch {
                 if (permission !in permissions) root.appendChild(manifest.createElement("uses-permission").apply { setAttribute("android:name", permission) })
             }
             val app = manifest.getElementsByTagName("application").item(0) as Element
+            if(warningRecovery){
+                check((0 until app.getElementsByTagName("activity").length).none{(app.getElementsByTagName("activity").item(it) as Element).getAttribute("android:name")=="$namespace.WarningRecoveryActivity"})
+                app.appendChild(manifest.createElement("activity").apply{setAttribute("android:name","$namespace.WarningRecoveryActivity");setAttribute("android:exported","false")})
+            }
             for ((name, exported) in listOf("NavigationControlService" to true, "NavigationEngineService" to false)) {
                 check((0 until app.getElementsByTagName("service").length).none {
                     (app.getElementsByTagName("service").item(it) as Element).getAttribute("android:name") == "$namespace.$name"

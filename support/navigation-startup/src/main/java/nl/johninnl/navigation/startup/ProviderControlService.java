@@ -16,6 +16,9 @@ public abstract class ProviderControlService extends Service {
     protected abstract boolean engineRunning();
     protected abstract String receiverPackage();
     protected abstract Class<? extends ProviderEngineService> engineService();
+    /** Optional semantic warning API. Called only after the startup caller has been authorized. */
+    protected void appendWarningCapabilities(Bundle response, int uid) { }
+    protected void observeControlClient(int uid, boolean warningAware) { }
 
     private final Binder api = new Binder() {
         @Override protected boolean onTransact(int code, Parcel data, Parcel reply, int flags) throws RemoteException {
@@ -25,6 +28,12 @@ public abstract class ProviderControlService extends Service {
             int uid = Binder.getCallingUid();
             if (uid != Process.myUid() && !StartupProtocol.allowed(getPackageManager().getPackagesForUid(uid), receiverPackage()))
                 throw new SecurityException("Navigation startup is restricted to the configured receiving map");
+            boolean warningAware=false;
+            if(data.dataAvail()!=0){
+                if(data.dataAvail()!=4 || data.readInt()!=1)throw new IllegalArgumentException("Unsupported startup capability declaration");
+                warningAware=true;
+            }
+            observeControlClient(uid,warningAware);
             Bundle response = new Bundle();
             response.putInt("version", 1);
             String state;
@@ -48,6 +57,7 @@ public abstract class ProviderControlService extends Service {
             response.putString("state", state);
             response.putBoolean("audio_muted", ProviderAudio.muted());
             response.putString("engine_state", ProviderEngineService.lastState());
+            appendWarningCapabilities(response, uid);
             reply.writeNoException(); reply.writeBundle(response); return true;
         }
     };

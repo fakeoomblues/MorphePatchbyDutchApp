@@ -8,6 +8,7 @@ import android.os.Looper;
 import java.time.Duration;
 import java.util.List;
 import org.junit.Before;
+import org.junit.After;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.robolectric.RobolectricTestRunner;
@@ -17,7 +18,8 @@ import org.robolectric.annotation.Config;
 @Config(sdk=32,manifest=Config.NONE)
 public class NavigationBroadcastsTest {
  Application app;
- @Before public void setup() { app=RuntimeEnvironment.getApplication(); NavigationBroadcasts.resetForTest(); nl.flitsmeister.fmcore.models.eventbuses.AppNotificationBus.version15=false; NavigationBroadcasts.init(app); }
+ @Before public void setup() { app=RuntimeEnvironment.getApplication(); NavigationBroadcasts.resetForTest(); nl.flitsmeister.fmcore.models.eventbuses.AppNotificationBus.version15=false; NativeWarnings.setEndpointForTest(nl.johninnl.navigation.alerts.WarningEndpointFixtures.empty()); NavigationBroadcasts.init(app); }
+ @After public void cleanup(){NativeWarnings.setEndpointForTest(null);}
  Intent last() { List<Intent> e=shadowOf(app).getBroadcastIntents(); return e.get(e.size()-1); }
  Location fix(float speed) { Location l=new Location("gps"); l.setLatitude(52); l.setLongitude(5); l.setAccuracy(4); l.setSpeed(speed); l.setElapsedRealtimeNanos(android.os.SystemClock.elapsedRealtimeNanos()); return l; }
  @Test public void sharedContractWorksWithoutOverlay() {
@@ -36,6 +38,21 @@ public class NavigationBroadcastsTest {
  @Test public void stopClearsAllMetrics() {
   NavigationBroadcasts.location(fix(20)); NavigationBroadcasts.limit(65,"imperial"); NavigationBroadcasts.stopped();
   assertEquals("unknown",last().getStringExtra("current_speed_status")); assertFalse(last().hasExtra("current_speed_kmh")); assertFalse(last().hasExtra("road_speed_limit_kmh"));
+ }
+ @Test public void uncertainOutputKeepsSpeedFeedButMasksLegacyAnnouncementFields() throws Exception {
+  android.content.pm.PackageInfo info=new android.content.pm.PackageInfo();info.packageName="app.vela";
+  info.applicationInfo=new android.content.pm.ApplicationInfo();info.applicationInfo.packageName=info.packageName;info.applicationInfo.uid=10001;
+  shadowOf(app.getPackageManager()).installPackage(info);
+  nl.johninnl.navigation.alerts.WarningEndpoint failed=nl.johninnl.navigation.alerts.WarningEndpointFixtures.failing();
+  long until=System.nanoTime()+java.util.concurrent.TimeUnit.SECONDS.toNanos(2);
+  while(!failed.exclusiveAudio()&&System.nanoTime()<until)Thread.sleep(1);
+  assertTrue("Unknown durable output must remain fenced",failed.exclusiveAudio());
+  NativeWarnings.setEndpointForTest(failed);NavigationBroadcasts.resetForTest();NavigationBroadcasts.init(app);
+  NavigationBroadcasts.location(fix(20));NavigationBroadcasts.limit(100,"metric");
+  Intent masked=last();assertEquals("app.vela",masked.getPackage());
+  assertEquals("disabled",masked.getStringExtra("alerts_status"));assertEquals("disabled",masked.getStringExtra("zone_approach_status"));
+  assertEquals(72,masked.getDoubleExtra("current_speed_kmh",-1),0.0001);assertEquals(100,masked.getDoubleExtra("road_speed_limit_kmh",-1),0);
+  assertFalse(masked.hasExtra("alert_ids"));assertFalse(masked.hasExtra("zone_approach_id"));
  }
  @Test public void deliveredOldGpsFixDoesNotBecomeFresh() {
   Location l=fix(20); l.setElapsedRealtimeNanos(1); NavigationBroadcasts.location(l);

@@ -25,5 +25,6 @@ val wazeAlertsPatch = bytecodePatch(
 
     execute {
         markPatched("wazeAlertsPatched")
+        bindMapsWarningVoice()
     }
 }

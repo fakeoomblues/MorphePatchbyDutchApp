@@ -34,6 +34,8 @@ Blocking measurement does not block every function from the same provider. Essen
 
 ## Before using
 
+The native FM event/speech upgrade is still under integrated validation. Native event capture targets 14.17 / 1287; 15.0 retains its existing legacy data/startup bridge and does not advertise this event protocol. Pinned producer capture has passed its coverage audit; receiving audio, routing and lifecycle acceptance continue. Its category/output review, parked preview and recovery controls are described in the [native-warning setup section](../guides/navigation-data.md#native-flitsmeister-warning-audio).
+
 The recovered startup/native profile targets ARM64. On an Android 16 phone, map startup, HUD, icon changes/reopening, the profile badge and soundpack-offer removal have been checked. Backend entitlements and a physical Android Auto head unit remain separate checks.
 
 Updated navigation-data patches add silent provider startup and native-engine health checks. After one-time provider setup and location permission, Maps/Vela starts the selected Waze or Flitsmeister engine without opening its screen, and retries recoverable stoppages while the map is in use. Repatch both sides to add the startup API; the older Share alerts bridge keeps its manual startup requirement. See the [navigation-data setup guide](../guides/navigation-data.md).
